@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS CloudFormation Template for a single-instance bastion host'
+
+Parameters:
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+
+  EnvironmentType:
+    Description: "Specify which env to run in"
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+  KeyName:
+    Description: Name of an existing EC2 KeyPair for SSH
+    Type: AWS::EC2::KeyPair::KeyName
+
+Mappings:
+  EnvironmentTypeToInstanceType:
+    dev:
+      InstanceType: t2.nano
+    test:
+      InstanceType: t2.micro
+    prod:
+      InstanceType: t2.small
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  Subnet10:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      MapPublicIpOnLaunch: true
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+
+  Subnet10RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet10
+
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: !Ref LatestAmiId
+      InstanceType:
+        !FindInMap [EnvironmentTypeToInstanceType, !Ref EnvironmentType, InstanceType]
+      SubnetId: !Ref Subnet10
+
+      # Normal operation: this security group allows shell/SSH access to the
+      # bastion host from inside the VPC.
+      #
+      # Incident response containment step: if suspicious activity is detected,
+      # update this list by replacing InboundAccessSecurityGroup with
+      # IsolatedBastionSecurityGroup, then redeploy the CloudFormation stack.
+      SecurityGroupIds:
+        - !Ref InboundAccessSecurityGroup
+
+      KeyName: !Ref KeyName
+
+  InboundAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow inbound SSH access to the bastion host from inside the VPC"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/16
+
+  # Incident Response Playbook: Bastion Host Containment
+  #
+  # Scenario:
+  # Automated monitoring detects anomalous network activity from the bastion host.
+  #
+  # Step 1:
+  # Preserve evidence by recording the instance ID, public DNS name, timestamps,
+  # current security groups, CloudTrail events, and any available VPC flow logs.
+  #
+  # Step 2:
+  # Contain the host by changing the BastionInstance SecurityGroupIds value from
+  # InboundAccessSecurityGroup to IsolatedBastionSecurityGroup.
+  #
+  # Step 3:
+  # Redeploy the CloudFormation stack so the bastion host is isolated from the
+  # VPC and the public internet.
+  #
+  # Step 4:
+  # Investigate authentication logs, running processes, network connections,
+  # installed packages, and suspicious files.
+  #
+  # Step 5:
+  # Restore normal access only after the suspicious activity is understood,
+  # remediated, and approved by the incident response team.
+  IsolatedBastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Incident response isolation group for bastion host"
+      VpcId: !Ref VPC
+
+      # No inbound rules are defined, so nothing can initiate communication
+      # with the bastion host while this security group is assigned.
+      SecurityGroupIngress: []
+
+      # Remove the default outbound rule so the bastion host cannot initiate
+      # communication with the VPC or the public internet during containment.
+      SecurityGroupEgress: []
+
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created EC2 instance
+    Value: !Ref BastionInstance
+
+  URI:
+    Description: URI that points to public SSH end point
+    Value: !Sub ssh://${BastionInstance.PublicDnsName}
