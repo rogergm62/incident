@@ -1,4 +1,4 @@
-# incident
+# CIS 460 Incident Response
 
 # Incident Response Playbook Automation Lab
 
