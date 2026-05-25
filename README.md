@@ -31,9 +31,7 @@ The GitHub Actions workflow in `.github/workflows/deploy.yaml` runs when changes
 
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
-
+- `AWS_SESSION_TOKEN`
 The workflow deploys the CloudFormation stack named `bastion`.
 
-## Note
 
-I completed the required changes to the CloudFormation template and added the GitHub Actions deployment workflow. I could not find the AWS access keys in my AWS Academy lab environment, so I was not able to fully test the automatic deployment. However, the repository includes the modified `bastion.yaml` file and the `.github/workflows/deploy.yaml` file required for the assignment.
